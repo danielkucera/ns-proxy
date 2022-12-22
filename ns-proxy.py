@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 import requests
 import threading
+import time
 
 def forward(method, url, headers, data):
     try:
@@ -15,6 +16,8 @@ def forward(method, url, headers, data):
 
 class MyServer(BaseHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
+        self.ns_list = []
+        self.last_updated = 0
         self.targetSvc = kwargs.pop('targetSvc')
 
     def __call__(self, *args, **kwargs):
@@ -26,6 +29,18 @@ class MyServer(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.handle_request()
+
+    def get_ns_list(self):
+        if time.time() > self.last_updated + 15:
+            print("updating ns list")
+            new_list = []
+            ret = v1.list_service_for_all_namespaces(watch=False)
+            for i in ret.items:
+                if i.metadata.name == targetSvc:
+                    new_list.append(i.metadata.namespace)
+            self.ns_list = new_list
+            self.last_updated = time.time()
+        return self.ns_list
 
     def handle_request(self):
         for fh in [ "Host" ]:
@@ -43,12 +58,9 @@ class MyServer(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
-        ret = v1.list_service_for_all_namespaces(watch=False)
-        for i in ret.items:
-            if i.metadata.name == self.targetSvc:
-                ns = i.metadata.namespace
-                url = "http://%s.%s.svc.cluster.local%s" % (self.targetSvc, ns, path)
-                threading.Thread(target=forward, args=(method, url, headers, data,)).start()
+        for ns in self.get_ns_list():
+            url = "http://%s.%s.svc.cluster.local%s" % (self.targetSvc, ns, path)
+            threading.Thread(target=forward, args=(method, url, headers, data,)).start()
 
 if __name__ == "__main__":        
     config.load_incluster_config()
